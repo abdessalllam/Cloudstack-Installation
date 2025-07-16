@@ -89,6 +89,8 @@ nano /etc/cloudstack/agent/agent.properties
 # Now, check if it has been reflected.
 grep "host=" /etc/cloudstack/agent/agent.properties
 ```
+And don't forget `guid=`
+
 ### Step 5: Reboot (Important!)
 
 After the script finishes, **you must reboot**:
