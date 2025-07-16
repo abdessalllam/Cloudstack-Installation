@@ -18,7 +18,7 @@ This script is basically your CloudStack installation buddy. It'll handle all th
 ### Hardware Requirements
 Listen, don't try to run this on a potato. You'll need:
 - **CPU**: Something with VT-x (Intel) or AMD-V (AMD) - basically any decent server CPU from the last decade
-- **RAM**: 8GB minimum, but honestly 16GB+ is better if you want to run actual VMs
+- **RAM**: 8GB minimum, but honestly 64GB+ is better if you want to run multiple actual VMs
 - **Storage**: 
   - At least 50GB for the OS and CloudStack
   - A separate disk for secondary storage (this is where VM templates live) but not a requirement.
