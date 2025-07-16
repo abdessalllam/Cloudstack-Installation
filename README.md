@@ -78,6 +78,10 @@ The installation takes about 10-15 minutes depending on your internet speed. The
 - Configure storage
 - Start all services
 
+**Install the Agent**
+```bash
+sudo apt-get install cloudstack-agent
+```
 ### Step 5: Reboot (Important!)
 
 After the script finishes, **you must reboot**:
