@@ -6,6 +6,8 @@ See the Instructions here: [Manual Installation Instractions](https://github.com
 ## For the Main Installer Skip this step and proceed.
 For Simpler Auto Installer Up to step 7:
 ```bash
+git clone https://github.com/abdessalllam/Cloudstack-Installation
+cd Cloudstack-Installation
 chmod +x install_v2.sh
 sudo ./install_v2.sh
 ```
