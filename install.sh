@@ -2,6 +2,7 @@
 #===========================================================================================
 # CloudStack 4.20 (Mgmt + KVM) on Ubuntu 22/24 Auto Installer - "Kind of" PRODUCTION READY
 # Author: https://github.com/abdessalllam
+# Modified: With improved input handling and retry logic
 #
 #       ░███    ░██               ░██                                             ░██ ░██ ░██                            
 #      ░██░██   ░██               ░██                                             ░██ ░██ ░██                            
@@ -27,7 +28,7 @@ This installer will prompt you for:
   • CloudStack DB name [cloud]
   • CloudStack DB user & pass
   • MySQL root password
-  • Block device for secondary storage (e.g. /dev/sdb)
+  • Block device for secondary storage (optional)
 
 It then configures networking, installs, tunes and deploys:
   – KVM/QEMU & libvirt
@@ -51,7 +52,6 @@ fi
 
 #------------------------------------------------------------------------------
 # Pre-flight checks: Get your boarding pass ready 😂
-# I had to say that LOL!
 #------------------------------------------------------------------------------
 check_virtualization() {
   if ! grep -qE 'vmx|svm' /proc/cpuinfo; then
@@ -83,46 +83,265 @@ check_memory
 check_disk_space
 
 #------------------------------------------------------------------------------
-# 1/ Prompt for inputs with validation
+# Validator functions
 #------------------------------------------------------------------------------
-read -rp "Enter FQDN for this server (e.g. cs.example.com): " HOST_FQDN
-if [[ ! $HOST_FQDN =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-  echo "ERROR: Invalid FQDN format." >&2
-  exit 1
-fi
+validate_fqdn() {
+  local fqdn="$1"
+  [[ $fqdn =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]
+}
 
-read -rp "CloudStack DB name [cloud]: " DB_NAME
-DB_NAME=${DB_NAME:-cloud}
+validate_db_name() {
+  local name="$1"
+  [[ $name =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]] && [[ ${#name} -le 64 ]]
+}
 
-read -rp "CloudStack DB user: " DB_USER
-if [[ -z $DB_USER ]]; then
-  echo "ERROR: Database user cannot be empty." >&2
-  exit 1
-fi
+validate_username() {
+  local user="$1"
+  [[ -n "$user" ]] && [[ ${#user} -le 32 ]] && [[ $user =~ ^[a-zA-Z][a-zA-Z0-9_]*$ ]]
+}
 
-read -rsp "CloudStack DB user password: " DB_PASS; echo
-if [[ ${#DB_PASS} -lt 8 ]]; then
-  echo "ERROR: Database password must be at least 8 characters." >&2
-  exit 1
-fi
+#------------------------------------------------------------------------------
+# Retry wrapper for any input prompt
+#------------------------------------------------------------------------------
+prompt_with_retry() {
+  local prompt="$1"
+  local validator="$2"
+  local error_msg="$3"
+  local result=""
+  
+  while true; do
+    read -rp "$prompt" result
+    
+    # If validator function exists, use it
+    if [[ -n "$validator" ]]; then
+      if $validator "$result"; then
+        echo "$result"
+        return 0
+      else
+        echo "$error_msg" >&2
+      fi
+    else
+      # No validator, just ensure non-empty
+      if [[ -n "$result" ]]; then
+        echo "$result"
+        return 0
+      else
+        echo "Input cannot be empty. Please try again." >&2
+      fi
+    fi
+  done
+}
 
-read -rsp "MySQL root password: " DB_ROOT_PASS; echo
-if [[ ${#DB_ROOT_PASS} -lt 8 ]]; then
-  echo "ERROR: MySQL root password must be at least 8 characters." >&2
-  exit 1
-fi
+#------------------------------------------------------------------------------
+# Password prompt with retry
+#------------------------------------------------------------------------------
+prompt_password_with_retry() {
+  local prompt="$1"
+  local min_length="${2:-8}"
+  local result=""
+  
+  while true; do
+    read -rsp "$prompt" result
+    echo
+    
+    if [[ ${#result} -lt $min_length ]]; then
+      echo "Password must be at least $min_length characters. Please try again." >&2
+    else
+      echo "$result"
+      return 0
+    fi
+  done
+}
 
-read -rp "Block device for Secondary storage (e.g. /dev/sdb): " SEC_DEV
-if [[ ! -b $SEC_DEV ]]; then
-  echo "ERROR: $SEC_DEV is not a valid block device." >&2
-  exit 1
-fi
+#------------------------------------------------------------------------------
+# Function to get available unpartitioned block devices
+#------------------------------------------------------------------------------
+get_available_devices() {
+  local devices=()
+  local dev_info=""
+  
+  # Find all block devices that are disks (not partitions) and not mounted
+  while IFS= read -r device; do
+    # Skip if device doesn't exist
+    [[ -b "/dev/$device" ]] || continue
+    
+    # Skip if it's a partition (has a number at the end)
+    [[ "$device" =~ [0-9]$ ]] && continue
+    
+    # Skip loop devices
+    [[ "$device" =~ ^loop ]] && continue
+    
+    # Skip if any partition of this device is mounted
+    if mount | grep -q "^/dev/$device"; then
+      continue
+    fi
+    
+    # Get device size
+    size=$(lsblk -dn -o SIZE "/dev/$device" 2>/dev/null | head -1)
+    
+    # Check if device has partitions
+    if lsblk -n "/dev/$device" | grep -q "^${device}[0-9]"; then
+      # Has partitions, skip
+      continue
+    fi
+    
+    devices+=("/dev/$device")
+    dev_info="${dev_info}/dev/$device ($size)\n"
+  done < <(lsblk -dn -o NAME)
+  
+  echo -e "$dev_info"
+  printf '%s\n' "${devices[@]}"
+}
 
-# Check if device is already mounted
-if mount | grep -q "$SEC_DEV"; then
-  echo "ERROR: $SEC_DEV is already mounted." >&2
-  exit 1
-fi
+#------------------------------------------------------------------------------
+# Block device selection with retry logic
+#------------------------------------------------------------------------------
+select_block_device() {
+  local selected_device=""
+  local device_list
+  local devices_array=()
+  
+  while true; do
+    echo
+    echo "=== Secondary Storage Device Selection ==="
+    echo
+    
+    # Get available devices
+    mapfile -t devices_array < <(get_available_devices | tail -n +2)
+    device_list=$(get_available_devices | head -n -${#devices_array[@]})
+    
+    if [[ ${#devices_array[@]} -eq 0 ]]; then
+      echo "No unpartitioned block devices found."
+      echo
+      echo "Options:"
+      echo "  s) Skip secondary storage configuration"
+      echo "  r) Refresh device list"
+      echo "  q) Quit installation"
+      echo
+      read -rp "Select option [s/r/q]: " choice
+      
+      case $choice in
+        s|S)
+          echo "Skipping secondary storage configuration..."
+          SEC_DEV="SKIP"
+          return 0
+          ;;
+        r|R)
+          echo "Refreshing device list..."
+          sleep 1
+          continue
+          ;;
+        q|Q)
+          echo "Installation cancelled by user."
+          exit 0
+          ;;
+        *)
+          echo "Invalid option. Please try again."
+          continue
+          ;;
+      esac
+    else
+      echo "Available unpartitioned block devices:"
+      echo
+      
+      # Display devices with numbers
+      local i=1
+      while IFS= read -r dev_info; do
+        echo "  $i) $dev_info"
+        ((i++))
+      done <<< "$device_list"
+      
+      echo
+      echo "Options:"
+      echo "  s) Skip secondary storage configuration"
+      echo "  r) Refresh device list"
+      echo "  q) Quit installation"
+      echo
+      read -rp "Select device number or option [1-${#devices_array[@]}/s/r/q]: " choice
+      
+      # Check if it's a number
+      if [[ "$choice" =~ ^[0-9]+$ ]]; then
+        if (( choice >= 1 && choice <= ${#devices_array[@]} )); then
+          selected_device="${devices_array[$((choice-1))]}"
+          
+          # Confirm selection
+          echo
+          echo "Selected device: $selected_device"
+          read -rp "This will ERASE ALL DATA on $selected_device. Continue? [y/N]: " confirm
+          
+          if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            SEC_DEV="$selected_device"
+            return 0
+          else
+            echo "Device selection cancelled."
+            continue
+          fi
+        else
+          echo "Invalid device number. Please try again."
+          continue
+        fi
+      else
+        case $choice in
+          s|S)
+            echo "Skipping secondary storage configuration..."
+            SEC_DEV="SKIP"
+            return 0
+            ;;
+          r|R)
+            echo "Refreshing device list..."
+            sleep 1
+            continue
+            ;;
+          q|Q)
+            echo "Installation cancelled by user."
+            exit 0
+            ;;
+          *)
+            echo "Invalid option. Please try again."
+            continue
+            ;;
+        esac
+      fi
+    fi
+  done
+}
+
+#------------------------------------------------------------------------------
+# 1/ Prompt for inputs with validation and retry
+#------------------------------------------------------------------------------
+echo
+echo "=== CloudStack Installation Configuration ==="
+echo
+
+# FQDN prompt with retry
+HOST_FQDN=$(prompt_with_retry \
+  "Enter FQDN for this server (e.g. cs.example.com): " \
+  "validate_fqdn" \
+  "ERROR: Invalid FQDN format. Please use format like 'cs.example.com'")
+
+# Database name with default and validation
+while true; do
+  read -rp "CloudStack DB name [cloud]: " DB_NAME
+  DB_NAME=${DB_NAME:-cloud}
+  if validate_db_name "$DB_NAME"; then
+    break
+  else
+    echo "ERROR: Database name must start with a letter and contain only letters, numbers, and underscores." >&2
+  fi
+done
+
+# Database user
+DB_USER=$(prompt_with_retry \
+  "CloudStack DB user: " \
+  "validate_username" \
+  "ERROR: Username must start with a letter and contain only letters, numbers, and underscores.")
+
+# Passwords
+DB_PASS=$(prompt_password_with_retry "CloudStack DB user password: " 8)
+DB_ROOT_PASS=$(prompt_password_with_retry "MySQL root password: " 8)
+
+# Block device selection
+select_block_device
 
 #------------------------------------------------------------------------------
 # 2/ Network discovery & hostname
@@ -192,542 +411,4 @@ GRUB_BACKUP="${GRUB_CFG}.backup"
 cp "$GRUB_CFG" "$GRUB_BACKUP"
 
 # Check CPU vendor for appropriate IOMMU setting
-if grep -q "vendor_id.*GenuineIntel" /proc/cpuinfo; then
-  IOMMU_PARAM="intel_iommu=on"
-elif grep -q "vendor_id.*AuthenticAMD" /proc/cpuinfo; then
-  IOMMU_PARAM="amd_iommu=on"
-else
-  IOMMU_PARAM="iommu=pt"
-fi
-
-# Add required kernel parameters
-KERNEL_PARAMS="$IOMMU_PARAM iommu=pt systemd.unified_cgroup_hierarchy=false"
-
-if ! grep -q "$IOMMU_PARAM" "$GRUB_CFG"; then
-  sed -i "s/GRUB_CMDLINE_LINUX=\"\(.*\)\"/GRUB_CMDLINE_LINUX=\"\1 $KERNEL_PARAMS\"/" "$GRUB_CFG"
-  sed -i 's/GRUB_CMDLINE_LINUX="  */GRUB_CMDLINE_LINUX="/' "$GRUB_CFG"
-  update-grub
-  update-initramfs -u
-  echo "IOMMU and cgroup v1 enabled; reboot required."
-fi
-
-# 3b) Ensure cgroup v1 is properly configured
-mkdir -p /sys/fs/cgroup/freezer
-if ! mountpoint -q /sys/fs/cgroup/freezer 2>/dev/null; then
-  if ! grep -q "freezer /sys/fs/cgroup/freezer" /etc/fstab; then
-    echo "freezer /sys/fs/cgroup/freezer cgroup freezer 0 0" >> /etc/fstab
-  fi
-fi
-
-#------------------------------------------------------------------------------
-# 4/ Configure network bridge with improved Netplan
-#------------------------------------------------------------------------------
-echo "Configuring network bridge..."
-
-apt update
-apt install -y bridge-utils netplan.io
-
-# Backup existing netplan configs
-mkdir -p /etc/netplan/backup
-cp /etc/netplan/*.yaml /etc/netplan/backup/ 2>/dev/null || true
-
-# Remove existing netplan configs
-rm -f /etc/netplan/*.yaml
-
-NETPLAN_FILE="/etc/netplan/01-cloudstack-bridge.yaml"
-
-# Extract network prefix for proper subnet configuration
-NETWORK_PREFIX=$(echo "$CIDR" | cut -d/ -f2)
-
-cat > "$NETPLAN_FILE" <<EOF
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    $ADAPTER:
-      dhcp4: no
-      dhcp6: no
-  bridges:
-    br0:
-      interfaces: [$ADAPTER]
-      dhcp4: no
-      dhcp6: no
-      addresses: [$CIDR]
-      routes:
-        - to: default
-          via: $GATEWAY
-      nameservers:
-        addresses: [1.1.1.1, 1.0.0.1, 8.8.8.8]
-      parameters:
-        stp: false
-        forward-delay: 0
-EOF
-
-# Validate netplan configuration
-if ! netplan try --timeout=30; then
-  echo "ERROR: Netplan configuration failed." >&2
-  cp /etc/netplan/backup/*.yaml /etc/netplan/ 2>/dev/null || true
-  exit 1
-fi
-
-# Apply configuration
-netplan apply
-
-# Wait for br0 to come up and verify
-echo "Waiting for bridge to come up..."
-for i in {1..30}; do
-  if ip addr show br0 | grep -q "$IP_ADDR"; then
-    break
-  fi
-  sleep 1
-done
-
-# Verify bridge is working
-if ! ip addr show br0 | grep -q "$IP_ADDR"; then
-  echo "ERROR: Bridge br0 did not receive correct IP address." >&2
-  exit 1
-fi
-
-# Test connectivity through bridge
-ping -c2 -W5 "$GATEWAY" >/dev/null || {
-  echo "ERROR: Cannot ping gateway through bridge." >&2
-  exit 1
-}
-
-echo "Network bridge configured successfully."
-
-#------------------------------------------------------------------------------
-# 5/ Install packages
-#------------------------------------------------------------------------------
-echo "Installing required packages..."
-
-apt update
-apt install -y \
-  qemu-kvm libvirt-daemon-system libvirt-clients virtinst \
-  mysql-server nfs-kernel-server rpcbind \
-  chrony openssh-server sudo vim htop iotop \
-  curl gnupg lsb-release ca-certificates \
-  python3-libvirt python3-pip \
-  cpu-checker libguestfs-tools \
-  bridge-utils vlan \
-  uuid-runtime
-
-# Enable and start services
-systemctl enable libvirtd
-systemctl start libvirtd
-systemctl enable nfs-kernel-server
-systemctl start nfs-kernel-server
-
-# Add user to libvirt group for management
-usermod -a -G libvirt root
-
-#------------------------------------------------------------------------------
-# 6/ Configure libvirt for CloudStack
-#------------------------------------------------------------------------------
-echo "Configuring libvirt..."
-
-# Configure libvirt to listen on TCP (required for CloudStack)
-cat > /etc/libvirt/libvirtd.conf <<EOF
-listen_tls = 0
-listen_tcp = 1
-tcp_port = "16509"
-listen_addr = "0.0.0.0"
-auth_tcp = "none"
-mdns_adv = 0
-EOF
-
-# Update libvirt service configuration
-mkdir -p /etc/systemd/system/libvirtd.service.d
-cat > /etc/systemd/system/libvirtd.service.d/override.conf <<EOF
-[Service]
-ExecStart=
-ExecStart=/usr/sbin/libvirtd --listen
-EOF
-
-# Configure default libvirt network to use br0
-cat > /tmp/br0-network.xml <<EOF
-<network>
-  <name>br0</name>
-  <forward mode="bridge"/>
-  <bridge name="br0"/>
-</network>
-EOF
-
-# Define and start the network
-virsh net-define /tmp/br0-network.xml
-virsh net-start br0
-virsh net-autostart br0
-
-# Set default network to br0
-virsh net-destroy default 2>/dev/null || true
-virsh net-undefine default 2>/dev/null || true
-
-systemctl daemon-reload
-systemctl restart libvirtd
-
-#------------------------------------------------------------------------------
-# 7/ Add CloudStack repo & install
-#------------------------------------------------------------------------------
-echo "Adding CloudStack repository and installing packages..."
-
-CODENAME=$(lsb_release -cs)
-curl -fsSL https://download.cloudstack.org/release.asc \
-  | gpg --dearmor \
-  | tee /usr/share/keyrings/cloudstack-archive-keyring.gpg >/dev/null
-
-cat > /etc/apt/sources.list.d/cloudstack.list <<EOF
-deb [signed-by=/usr/share/keyrings/cloudstack-archive-keyring.gpg] \
-  https://download.cloudstack.org/ubuntu $CODENAME 4.20
-EOF
-
-apt update
-apt install -y cloudstack-management cloudstack-usage cloudstack-agent
-
-#------------------------------------------------------------------------------
-# 8/ Configure MySQL for production
-#------------------------------------------------------------------------------
-echo "Configuring MySQL for production..."
-
-# Backup original MySQL config
-cp /etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/mysql.conf.d/mysqld.cnf.backup
-
-# Calculate MySQL settings based on available memory
-TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
-
-# Conservative settings for production
-INNODB_BUFFER_POOL_SIZE=$((TOTAL_MEM_MB * 60 / 100))  # 60% of RAM
-MAX_CONNECTIONS=1000
-
-cat > /etc/mysql/mysql.conf.d/cloudstack.cnf <<EOF
-[mysqld]
-# Basic settings
-server-id = 1
-bind-address = 127.0.0.1
-port = 3306
-
-# SQL Mode
-sql-mode = "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ZERO_DATE,NO_ZERO_IN_DATE,NO_ENGINE_SUBSTITUTION"
-
-# Connection settings
-max_connections = $MAX_CONNECTIONS
-max_user_connections = 500
-connect_timeout = 60
-interactive_timeout = 7200
-wait_timeout = 7200
-
-# InnoDB settings
-innodb_buffer_pool_size = ${INNODB_BUFFER_POOL_SIZE}M
-innodb_log_file_size = 256M
-innodb_log_buffer_size = 16M
-innodb_flush_log_at_trx_commit = 1
-innodb_lock_wait_timeout = 600
-innodb_rollback_on_timeout = 1
-innodb_flush_method = O_DIRECT
-innodb_file_per_table = 1
-
-# Query cache
-query_cache_type = 1
-query_cache_size = 128M
-query_cache_limit = 4M
-
-# Logging
-log-bin = mysql-bin
-binlog-format = ROW
-expire_logs_days = 10
-slow_query_log = 1
-slow_query_log_file = /var/log/mysql/slow.log
-long_query_time = 5
-
-# Character set
-character-set-server = utf8mb4
-collation-server = utf8mb4_unicode_ci
-
-# Other optimizations
-tmp_table_size = 128M
-max_heap_table_size = 128M
-table_open_cache = 4000
-thread_cache_size = 100
-EOF
-
-systemctl restart mysql
-
-# Wait for MySQL to start
-sleep 10
-
-# Secure MySQL installation
-mysql -u root <<SQL
--- Set root password
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_ROOT_PASS}';
-
--- Remove anonymous users
-DELETE FROM mysql.user WHERE User='';
-
--- Remove remote root access
-DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
-
--- Remove test database
-DROP DATABASE IF EXISTS test;
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-
--- Reload privileges
-FLUSH PRIVILEGES;
-SQL
-
-#------------------------------------------------------------------------------
-# 9/ Create CloudStack database and user
-#------------------------------------------------------------------------------
-echo "Creating CloudStack database and user..."
-
-mysql -u root -p"${DB_ROOT_PASS}" <<SQL
--- Create database
-CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- Create user with proper permissions
-CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';
-CREATE USER IF NOT EXISTS '${DB_USER}'@'::1' IDENTIFIED BY '${DB_PASS}';
-
--- Grant all privileges on CloudStack database
-GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
-GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'::1';
-
--- Grant process privilege for CloudStack monitoring
-GRANT PROCESS ON *.* TO '${DB_USER}'@'localhost';
-GRANT PROCESS ON *.* TO '${DB_USER}'@'127.0.0.1';
-GRANT PROCESS ON *.* TO '${DB_USER}'@'::1';
-
-FLUSH PRIVILEGES;
-SQL
-
-#------------------------------------------------------------------------------
-# 10/ Initialize CloudStack database
-#------------------------------------------------------------------------------
-echo "Initializing CloudStack database..."
-
-cloudstack-setup-databases ${DB_USER}:${DB_PASS}@localhost \
-  --deploy-as=root:${DB_ROOT_PASS} \
-  --database=${DB_NAME}
-
-# Update database configuration if non-standard database name
-if [[ $DB_NAME != "cloud" ]]; then
-  sed -i "s/db.cloud.name=cloud/db.cloud.name=${DB_NAME}/" /etc/cloudstack/management/db.properties
-fi
-
-cloudstack-setup-management
-
-#------------------------------------------------------------------------------
-# 11/ Configure NFS storage
-#------------------------------------------------------------------------------
-echo "Configuring NFS storage..."
-
-# Create mount point for secondary storage
-mkdir -p /export/secondary
-mkdir -p /export/primary
-
-# Partition and format secondary storage device
-echo "Partitioning and formatting secondary storage device..."
-parted -s "$SEC_DEV" mklabel gpt
-parted -s "$SEC_DEV" mkpart primary ext4 0% 100%
-sleep 2
-
-# Format with ext4 and optimizations
-mkfs.ext4 -F -m 1 -O ^has_journal "${SEC_DEV}1"
-
-# Get UUID for fstab
-SEC_UUID=$(blkid -s UUID -o value "${SEC_DEV}1")
-
-# Add to fstab
-echo "UUID=${SEC_UUID} /export/secondary ext4 defaults,noatime 0 2" >> /etc/fstab
-
-# Mount secondary storage
-mount /export/secondary
-
-# Set proper permissions
-chown -R root:root /export/primary /export/secondary
-chmod 755 /export/primary /export/secondary
-
-# Configure NFS exports with proper security
-cat > /etc/exports <<EOF
-/export/primary *(rw,async,no_root_squash,no_subtree_check,fsid=1)
-/export/secondary *(rw,async,no_root_squash,no_subtree_check,fsid=2)
-EOF
-
-# Configure NFS server
-cat > /etc/default/nfs-kernel-server <<EOF
-RPCNFSDOPTS="-N 2 -N 3 -U"
-RPCMOUNTDOPTS="--manage-gids -N 2 -N 3"
-EOF
-
-# Restart NFS services
-systemctl restart nfs-kernel-server
-systemctl restart rpcbind
-
-# Export NFS shares
-exportfs -ra
-
-# Test NFS mounts locally
-showmount -e localhost
-
-#------------------------------------------------------------------------------
-# 12/ Configure firewall (ufw)
-#------------------------------------------------------------------------------
-echo "Configuring firewall..."
-
-if command -v ufw >/dev/null; then
-  ufw --force enable
-  
-  # SSH
-  ufw allow 22/tcp
-  
-  # CloudStack Management
-  ufw allow 8080/tcp
-  ufw allow 8250/tcp
-  
-  # MySQL (localhost only)
-  ufw allow from 127.0.0.1 to any port 3306
-  
-  # NFS
-  ufw allow 2049/tcp
-  ufw allow 111/tcp
-  ufw allow 111/udp
-  ufw allow 892/tcp
-  ufw allow 892/udp
-  ufw allow 32803/tcp
-  ufw allow 32769/udp
-  
-  # libvirt
-  ufw allow 16509/tcp
-  
-  # DHCP for VMs
-  ufw allow 67/udp
-  ufw allow 68/udp
-  
-  # DNS for VMs
-  ufw allow 53/tcp
-  ufw allow 53/udp
-  
-  # VXLAN (if using advanced networking)
-  ufw allow 4789/udp
-  
-  ufw reload
-fi
-
-#------------------------------------------------------------------------------
-# 13/ Configure SSH keys for CloudStack
-#------------------------------------------------------------------------------
-echo "Configuring SSH keys..."
-
-CS_SSH_DIR="/var/lib/cloudstack/management/.ssh"
-mkdir -p "$CS_SSH_DIR"
-
-# Generate SSH key pair if it doesn't exist
-if [[ ! -f "$CS_SSH_DIR/id_rsa" ]]; then
-  ssh-keygen -t rsa -b 4096 -N "" -f "$CS_SSH_DIR/id_rsa" -C "cloudstack@${HOST_FQDN}"
-fi
-
-# Set proper permissions
-chown -R cloud:cloud "$CS_SSH_DIR"
-chmod 700 "$CS_SSH_DIR"
-chmod 600 "$CS_SSH_DIR/id_rsa"
-chmod 644 "$CS_SSH_DIR/id_rsa.pub"
-
-# Add CloudStack public key to root's authorized_keys
-mkdir -p /root/.ssh
-cat "$CS_SSH_DIR/id_rsa.pub" >> /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
-
-#------------------------------------------------------------------------------
-# 14/ Start CloudStack services
-#------------------------------------------------------------------------------
-echo "Starting CloudStack services..."
-
-systemctl enable cloudstack-management
-systemctl enable cloudstack-usage
-systemctl start cloudstack-management
-systemctl start cloudstack-usage
-
-# Wait for management server to start
-echo "Waiting for CloudStack management server to start..."
-for i in {1..60}; do
-  if curl -f -s http://localhost:8080/client/ >/dev/null 2>&1; then
-    break
-  fi
-  sleep 5
-done
-
-#------------------------------------------------------------------------------
-# 15/ Final validation and cleanup
-#------------------------------------------------------------------------------
-echo "Performing final validation..."
-
-# Check if services are running
-if ! systemctl is-active --quiet cloudstack-management; then
-  echo "ERROR: CloudStack management service is not running." >&2
-  exit 1
-fi
-
-if ! systemctl is-active --quiet mysql; then
-  echo "ERROR: MySQL service is not running." >&2
-  exit 1
-fi
-
-if ! systemctl is-active --quiet libvirtd; then
-  echo "ERROR: libvirtd service is not running." >&2
-  exit 1
-fi
-
-if ! systemctl is-active --quiet nfs-kernel-server; then
-  echo "ERROR: NFS service is not running." >&2
-  exit 1
-fi
-
-# Clean up temporary files
-rm -f /tmp/br0-network.xml
-
-#------------------------------------------------------------------------------
-# 16/ Final message & next steps
-#------------------------------------------------------------------------------
-cat <<EOF
-
-=========================================================
-CloudStack 4.20 Production Installation Complete!
-
-Management UI: http://$HOST_FQDN:8080/client/
-Default credentials: admin / password
-
-System Information:
-- Hostname: $HOST_FQDN
-- Bridge Interface: br0 ($IP_ADDR)
-- Primary Storage: /export/primary (NFS)
-- Secondary Storage: /export/secondary (${SEC_DEV}1, NFS)
-- Database: $DB_NAME (user: $DB_USER)
-
-Next Steps:
-1. REBOOT the system to activate IOMMU and cgroup settings
-2. After reboot, run: sudo virt-host-validate
-3. Access the web UI and complete the initial setup wizard
-4. Configure zones, pods, clusters, and hosts
-
-SSH Key Information:
-- CloudStack SSH public key: $CS_SSH_DIR/id_rsa.pub
-- This key has been added to root's authorized_keys
-
-Post-Installation Checklist:
-□ Verify all services are running after reboot
-□ Check virt-host-validate output
-□ Test NFS mounts: showmount -e localhost
-□ Verify network connectivity through br0
-□ Complete CloudStack initial setup wizard
-□ Configure storage and network in CloudStack UI
-
-For support and documentation:
-- CloudStack Documentation: https://docs.cloudstack.org/
-- Community Support: https://cloudstack.apache.org/community/
-
-=========================================================
-
-EOF
-
-echo "Installation completed successfully. Please reboot the system now."
+if grep -q "vendor_id.*GenuineIntel" /proc/cpu
