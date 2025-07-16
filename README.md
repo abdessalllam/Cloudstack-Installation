@@ -8,7 +8,7 @@ See the Instructions here: [Manual Installation Instractions](https://github.com
 
 This script is basically your CloudStack installation buddy. It'll handle all the boring stuff like:
 - Setting up KVM hypervisor
-- Configuring MySQL database (properly tuned, not just the defaults)
+- Configuring MariaDB database (properly tuned, not just the defaults)
 - Installing CloudStack management server
 - Creating NFS storage for your VMs
 - Setting up networking with bridges (because VMs need to talk to the world)
