@@ -13,7 +13,8 @@ This script is basically your CloudStack installation buddy. It'll handle all th
 - Configuring all the security bits
 
 ## Before You Start
-
+- You may or may not run `./safe_network_test.sh` before running the main Installer to check if your network is bridgeable (Not even sure if that a word. Hahhh). It's not required. So, Anyway, You do you.
+  
 ### Hardware Requirements
 Listen, don't try to run this on a potato. You'll need:
 - **CPU**: Something with VT-x (Intel) or AMD-V (AMD) - basically any decent server CPU from the last decade
