@@ -89,7 +89,26 @@ nano /etc/cloudstack/agent/agent.properties
 # Now, check if it has been reflected.
 grep "host=" /etc/cloudstack/agent/agent.properties
 ```
-And don't forget `guid=`
+And don't forget `guid=` 
+I like adding at like:
+```bash
+# For dummies: This is a commmand. Run it in the terminal ;p
+GUID=$(uuidgen)
+echo "Generated GUID: $GUID"
+```
+Then I add `$GUID` so it'll be like `guid=$GUID` in agent.properties
+You might also need to generate new certs so that they can match.
+
+Change your cluster name in agent.properties as well. it's named `default` by dafault 😂. So, You'll need to either name the cluster `default` in the wizard or change that in agent.properties.
+
+Add the following and change ens9 to yours.
+```bash
+libvirt.uri=qemu:///system
+hypervisor.type=kvm
+private.network.device=eth0
+guest.network.device=eth0
+public.network.device=eth0
+```
 
 ### Step 5: Reboot (Important!)
 
