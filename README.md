@@ -13,6 +13,7 @@ This script is basically your CloudStack installation buddy. It'll handle all th
 - Creating NFS storage for your VMs
 - Setting up networking with bridges (because VMs need to talk to the world)
 - Configuring all the security bits
+- Setting up Templates
 
 ## Before You Start
 - You may or may not run `./safe_network_test.sh` before running the main Installer to check if your network is bridgeable (Not even sure if that a word. Hahhh). It's not required. So, Anyway, You do you.
@@ -121,6 +122,20 @@ For `server.properties`
 host=0.0.0.0
 management.server.host=0.0.0.0
 ```
+#### SSL Gen (Required for production)
+```bash
+# Create certificates for management server, Set your domains.
+# If you have your own valid ssl for domains that you'll use as a hostname, then use it instead.
+sudo keytool -genkeypair -keyalg RSA -keysize 2048 -keystore /etc/cloudstack/management/cloud.keystore -alias cloud -dname "CN=YOUR-IP_BUDDY" -storepass domain.com -keypass domain.com -validity 3650
+
+# Copy to agent
+sudo cp /etc/cloudstack/management/cloud.keystore /etc/cloudstack/agent/
+
+# Set ownership, if the user doesn't exit create a new one, duh!
+sudo chown cloud:cloud /etc/cloudstack/management/cloud.keystore
+sudo chown cloudstack:cloudstack /etc/cloudstack/agent/cloud.keystore
+```
+
 ### Step 5: Reboot (Important!)
 
 After the script finishes, **you must reboot**:
