@@ -109,7 +109,7 @@ You should see all "PASS" messages. If you see "FAIL" messages, something went w
 Check your services:
 ```bash
 sudo systemctl status cloudstack-management
-sudo systemctl status mysql
+sudo systemctl status mariadb
 sudo systemctl status libvirtd
 sudo systemctl status nfs-kernel-server
 ```
@@ -158,7 +158,7 @@ If using SSH key, the installer already set this up for you. The CloudStack publ
 - Verify bridge has correct IP: `ip addr show br0`
 
 **"Can't connect to database"**:
-- Check MySQL is running: `systemctl status mysql`
+- Check MariaDB is running: `systemctl status mariadb`
 - Verify database exists: `mysql -u root -p -e "SHOW DATABASES;"`
 
 **"VMs won't start"**:
@@ -174,7 +174,7 @@ If using SSH key, the installer already set this up for you. The CloudStack publ
 
 When things go wrong, check these logs:
 - CloudStack: `/var/log/cloudstack/management/`
-- MySQL: `/var/log/mysql/`
+- MariaDB: `/var/log/mariadb/`
 - System: `journalctl -u cloudstack-management`
 
 ## Network Configuration Details
@@ -201,7 +201,7 @@ Both are exported via NFS so CloudStack can manage them.
 
 The installer configures:
 - UFW firewall with only necessary ports open
-- MySQL with secure settings
+- MariaDB with secure settings
 - SSH keys for host managment
 - NFS with proper access controls
 
