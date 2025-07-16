@@ -82,6 +82,13 @@ The installation takes about 10-15 minutes depending on your internet speed. The
 ```bash
 sudo apt-get install cloudstack-agent
 ```
+Now, you need to change the hostname `host` in `agent.properties`, otherwise the agent wont run.
+```bash
+# Look foor host= then change it to the severs Public IP.
+nano /etc/cloudstack/agent/agent.properties
+# Now, check if it has been reflected.
+grep "host=" /etc/cloudstack/agent/agent.properties
+```
 ### Step 5: Reboot (Important!)
 
 After the script finishes, **you must reboot**:
