@@ -210,5 +210,14 @@ if you set encryption in DB to web, then add thsi to the end of the above comman
 sudo systemctl restart cloudstack-management
 ```
 
+### Adding Your First Host
+
+When adding the host in the wizard:
+- **Host Name**: Your server's FQDN
+- **Username**: root
+- **Authentication**: SSH Key (recommended) or Password
+
+If using SSH key, the installer already set this up for you. The CloudStack public key is in `/var/lib/cloudstack/management/.ssh/id_rsa.pub` and has been added to root's authorized_keys.
+
 # Now you are done, See documentation for more Info if you'd Like.
 # Leave a start if this was helpful so others can see it github@abdessalllam
