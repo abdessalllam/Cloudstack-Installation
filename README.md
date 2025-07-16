@@ -36,6 +36,7 @@ Listen, don't try to run this on a potato. You'll need:
 First, grab the installer:
 ```bash
 git clone https://github.com/abdessalllam/Cloudstack-Installation
+cd Cloudstack-Installation
 chmod +x install.sh
 ```
 
