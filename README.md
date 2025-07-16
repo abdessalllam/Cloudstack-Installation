@@ -97,7 +97,7 @@ GUID=$(uuidgen)
 echo "Generated GUID: $GUID"
 ```
 Then I add `$GUID` so it'll be like `guid=$GUID` in agent.properties
-You might also need to generate new certs so that they can match.
+You might also need to generate new certs so that they can match. 
 
 Change your cluster name in agent.properties as well. it's named `default` by dafault 😂. So, You'll need to either name the cluster `default` in the wizard or change that in agent.properties.
 
@@ -109,7 +109,18 @@ private.network.device=eth0
 guest.network.device=eth0
 public.network.device=eth0
 ```
-
+#### ***If*** this is a sandbox enviremen, you may disable SSL rather than generating new ones. 
+```bash
+# In the agent.properties and server.properties :w
+enable.ssl=false
+```
+For `server.properties`
+```bash
+# This is optional, its up to you.
+# So that you don't have to keep changing IP's. Lazy guy LOL
+host=0.0.0.0
+management.server.host=0.0.0.0
+```
 ### Step 5: Reboot (Important!)
 
 After the script finishes, **you must reboot**:
