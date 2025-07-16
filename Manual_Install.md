@@ -85,8 +85,8 @@ You may change DB Name or Password 'Cloudpass' to anything you like.
 **Add the official CloudStack 4.20 repository** to your system.
 
 ```bash
-echo "deb [http://download.cloudstack.org/ubuntu](http://download.cloudstack.org/ubuntu) jammy 4.20 main" | sudo tee /etc/apt/sources.list.d/cloudstack.list
-wget -O - [https://download.cloudstack.org/release.asc](https://download.cloudstack.org/release.asc) | sudo apt-key add -
+echo "deb http://download.cloudstack.org/ubuntu jammy 4.20 main" | sudo tee /etc/apt/sources.list.d/cloudstack.list
+wget -O - https://download.cloudstack.org/release.asc | sudo apt-key add -
 ```
 
 Update your package list and **install the `cloudstack-management` package**.
