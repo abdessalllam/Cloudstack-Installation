@@ -132,7 +132,13 @@ sudo apt-get install cloudstack-agent
 sudo systemctl enable cloudstack-management
 sudo systemctl start cloudstack-management
 ```
-
+Now, you need to change the hostname `host` in `agent.properties`, otherwise the agent wont run.
+```bash
+# Look foor host= then change it to the severs Public IP.
+nano /etc/cloudstack/agent/agent.properties
+# Now, check if it has been reflected.
+grep "host=" /etc/cloudstack/agent/agent.properties
+```
 ---
 
 ## 🌐 Step 7: Access the CloudStack UI
