@@ -3,6 +3,14 @@
 Hey there! 👋 This is mainly for me but what the heck, feel free to use and edit. This installer will get you up and running with a  "sort of" LOL production-ready CloudStack deployment faster than you can say "virtual machine". But lets be honest if you use this cause your installation kept failing, probably you should hire a freelancer ;p.  
 ## For Manual Install
 See the Instructions here: [Manual Installation Instractions](https://github.com/abdessalllam/Cloudstack-Installation/blob/main/Manual_Install.md)
+## For the Main Installer Skip this step and proceed.
+For Simpler Auto Installer Up to step 7:
+```bash
+chmod +x install_v2.sh
+sudo ./install_v2.sh
+```
+This Installer is Simple so It usually works.
+
 ## What This Thing Does
 
 This script is basically your CloudStack installation buddy. It'll handle all the boring stuff like:
