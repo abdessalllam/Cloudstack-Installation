@@ -128,6 +128,7 @@ virsh list --all
 **Enable the CloudStack service** to start on boot and then start it immediately.
 
 ```bash
+sudo apt-get install cloudstack-agent
 sudo systemctl enable cloudstack-management
 sudo systemctl start cloudstack-management
 ```
